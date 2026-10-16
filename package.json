@@ -12,6 +12,14 @@
     "notification"
   ],
   "author": "neonew",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/neonew91/opencode-larknotify.git"
+  },
+  "homepage": "https://github.com/neonew91/opencode-larknotify#readme",
+  "bugs": {
+    "url": "https://github.com/neonew91/opencode-larknotify/issues"
+  },
   "type": "module",
   "license": "MIT",
   "main": "./dist/index.js",
