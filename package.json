@@ -1,0 +1,66 @@
+{
+  "name": "opencode-larknotify",
+  "version": "0.1.0",
+  "description": "OpenCode plugin: push question / permission requests to Feishu (Lark) and answer them from your phone, with a TUI remote switch.",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui-plugin",
+    "feishu",
+    "lark",
+    "飞书",
+    "notification"
+  ],
+  "author": "neonew",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "import": "./dist/tui.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && bun script/build-tui.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun test && bun run typecheck"
+  },
+  "engines": {
+    "node": ">=20",
+    "opencode": ">=1.19.0 <1.20.0"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "1.19.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.19.0",
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "@types/bun": "latest",
+    "@types/node": "^24.0.0",
+    "solid-js": "1.9.12",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.75.0"
+  }
+}

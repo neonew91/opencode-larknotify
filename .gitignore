@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tgz
+.env
+.env.*
+!.env.example
+
+# Broker runtime files, in case OPENCODE_FEISHU_SOCKET points inside the repo.
+# broker.token is a real secret.
+broker.sock
+broker.token
+broker.db
+broker.log
+remote.json
