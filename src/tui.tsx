@@ -10,7 +10,7 @@ import { REMOTE_POLL_MS, readRemoteState, resolveRemoteStatePath, toggleRemoteSt
  * mode is on. The server half (`index.ts`) reads the same switch file.
  */
 
-const PLUGIN_ID = "opencode.feishu-webhook"
+const PLUGIN_ID = "opencode.larknotify"
 const TOGGLE_COMMAND = "feishu.notify.toggle"
 const SLASH_NAME = "larknotify"
 

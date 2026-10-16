@@ -244,7 +244,7 @@ function errorMessage(error: unknown): string {
 }
 
 const plugin = {
-  id: "opencode.feishu-webhook",
+  id: "opencode.larknotify",
   server,
 } satisfies PluginModule
 
