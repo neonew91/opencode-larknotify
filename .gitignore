@@ -5,6 +5,9 @@ dist/
 .env.*
 !.env.example
 
+# Never commit registry credentials.
+.npmrc
+
 # Broker runtime files, in case OPENCODE_FEISHU_SOCKET points inside the repo.
 # broker.token is a real secret.
 broker.sock
