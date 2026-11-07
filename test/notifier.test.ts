@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createNotifier, formatDirectory, type NotifierMode, type OpenCodeEvent, type SessionInfo } from "../src/notifier.js"
+import { normalizeEvent } from "../src/opencode/events.js"
 import type { DecisionRequest, Notification } from "../src/types.js"
 import type { NotifierBehavior } from "../src/options.js"
 
@@ -416,5 +417,37 @@ describe("remote switch", () => {
     const t = fixture("notify", { notifyOnPermission: false }, { remote: false })
     await t.handle(permissionAsked("p-1"))
     expect(t.deferredCount()).toBe(0)
+  })
+})
+
+describe("OpenCode 2 event normalization", () => {
+  test("routes a question form as a keyed form decision", async () => {
+    const t = fixture("interactive")
+    const event = normalizeEvent({
+      type: "form.created",
+      data: {
+        form: {
+          id: "form-1",
+          sessionID: "root",
+          metadata: { kind: "question" },
+          fields: [
+            {
+              key: "q0",
+              title: "方案",
+              description: "选哪个",
+              type: "string",
+              custom: true,
+              options: [{ value: "A", label: "A", description: "" }],
+            },
+          ],
+        },
+      },
+    })
+    await t.handle(event as OpenCodeEvent)
+
+    const decision = t.decisions[0]
+    expect(decision).toMatchObject({ kind: "form", requestID: "form-1" })
+    if (decision?.kind !== "form") throw new Error("expected a form decision")
+    expect(decision.questions[0]).toMatchObject({ key: "q0", answerType: "string", custom: true })
   })
 })

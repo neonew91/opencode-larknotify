@@ -63,12 +63,33 @@ export interface QuestionSpec {
   multiple: boolean
   /** OpenCode's question allows a free-form answer in addition to the options. */
   custom?: boolean
+  /** V2 form field key (`q0`, `q1`, ...). Absent for OpenCode 1.x questions. */
+  key?: string
+  /**
+   * How the answer must be encoded when it is written back to a V2 form.
+   * OpenCode 2.x question forms only use `string` and `multiselect`.
+   */
+  answerType?: "string" | "multiselect"
 }
+
+/** Answer map accepted by OpenCode 2.x `session.form.reply`. */
+export type FormAnswer = Record<string, string | string[]>
 
 /** A request that blocks an OpenCode session until the user decides in Feishu. */
 export type DecisionRequest =
   | {
       kind: "question"
+      requestID: string
+      instanceID: string
+      sessionID: string
+      directory: string
+      project: string
+      session: string
+      childSession?: string
+      questions: QuestionSpec[]
+    }
+  | {
+      kind: "form"
       requestID: string
       instanceID: string
       sessionID: string
@@ -95,6 +116,8 @@ export type DecisionRequest =
 export type Reply =
   | { kind: "question"; answers: string[][] }
   | { kind: "question-reject" }
+  | { kind: "form"; answer: FormAnswer }
+  | { kind: "form-cancel" }
   | { kind: "permission"; reply: "once" | "reject" }
 
 export type RequestKind = DecisionRequest["kind"]

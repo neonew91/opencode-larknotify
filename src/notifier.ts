@@ -1,6 +1,9 @@
 import type { DecisionRequest, Notification, QuestionSpec } from "./types.js"
 import type { NotifierBehavior } from "./options.js"
 import { isInteractiveQuestion } from "./decision.js"
+import type { OpenCodeEvent } from "./opencode/events.js"
+
+export type { OpenCodeEvent } from "./opencode/events.js"
 
 export interface SessionInfo {
   id: string
@@ -12,11 +15,6 @@ export interface SessionInfo {
     additions: number
     deletions: number
   }
-}
-
-export interface OpenCodeEvent {
-  type: string
-  properties: unknown
 }
 
 export type NotifierMode = "notify" | "interactive"
@@ -62,6 +60,7 @@ interface QuestionAsked {
   id: string
   sessionID: string
   questions: QuestionSpec[]
+  form: boolean
 }
 
 export function createNotifier(dependencies: NotifierDependencies) {
@@ -98,10 +97,10 @@ export function createNotifier(dependencies: NotifierDependencies) {
     const sessionID = stringField(props?.sessionID)
     const status = record(props?.status)
     const statusType = stringField(status?.type)
-    if (!sessionID || (statusType !== "busy" && statusType !== "idle")) return
+    if (!sessionID || (statusType !== "busy" && statusType !== "idle" && statusType !== "retry")) return
 
     const { root, source } = await resolveRoot(sessionID)
-    if (statusType === "busy") {
+    if (statusType === "busy" || statusType === "retry") {
       const state = getState(root.id)
       if (!state.active) {
         state.active = true
@@ -186,7 +185,7 @@ export function createNotifier(dependencies: NotifierDependencies) {
       deliver(request.id, {
         type: "decide",
         request: {
-          kind: "question",
+          kind: request.form ? "form" : "question",
           requestID: request.id,
           instanceID: dependencies.instanceID,
           sessionID: request.sessionID,
@@ -333,7 +332,7 @@ function parseQuestionAsked(value: unknown): QuestionAsked | undefined {
   if (!id || !sessionID || !Array.isArray(rawQuestions)) return undefined
   const questions = rawQuestions.map(parseQuestionSpec).filter((item): item is QuestionSpec => item !== undefined)
   if (questions.length === 0) return undefined
-  return { id, sessionID, questions }
+  return { id, sessionID, questions, form: props?.form === true }
 }
 
 function parseQuestionSpec(value: unknown): QuestionSpec | undefined {
@@ -350,7 +349,18 @@ function parseQuestionSpec(value: unknown): QuestionSpec | undefined {
       return { label, description: stringField(optionRecord?.description) ?? "" }
     })
     .filter((option): option is { label: string; description: string } => option !== undefined)
-  return { header: header ?? "", question, options, multiple: props?.multiple === true, custom: props?.custom !== false }
+  const key = stringField(props?.key)
+  const answerType =
+    props?.answerType === "multiselect" ? "multiselect" : props?.answerType === "string" ? "string" : undefined
+  return {
+    header: header ?? "",
+    question,
+    options,
+    multiple: props?.multiple === true,
+    custom: props?.custom !== false,
+    ...(key ? { key } : {}),
+    ...(answerType ? { answerType } : {}),
+  }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
