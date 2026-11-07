@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import plugin from "../src/index.js"
 import { createV2Host, setupV2, type V2PluginContext } from "../src/server/host-v2.js"
 import { readRemoteState } from "../src/remote.js"
 
@@ -127,5 +128,35 @@ describe("OpenCode 2 host", () => {
     expect(readRemoteState(path.join(dir, "remote.json")).enabled).toBe(true)
 
     await runtime!()
+  })
+})
+
+describe("dual entrypoint detection", () => {
+  test("setup runs with the real OpenCode 2 context", async () => {
+    const cleanup = await plugin.setup(context())
+    expect(cleanup).toBeTypeOf("function")
+    await cleanup?.()
+  })
+
+  test("setup skips the context when any required V2 capability is missing", async () => {
+    const full = context()
+    const cases: V2PluginContext[] = [
+      { ...full, event: undefined as never },
+      { ...full, session: undefined as never },
+      { ...full, permission: undefined as never },
+    ]
+    for (const ctx of cases) expect(await plugin.setup(ctx)).toBeUndefined()
+  })
+
+  test("setup ignores the degraded 1.19 config-plugin context", async () => {
+    // OpenCode 1.19's internal V2 loader calls setup({options}) without event,
+    // session or permission. Starting a runtime there would log an error and
+    // duplicate the V1 runtime.
+    expect(await plugin.setup({ options: {} } as V2PluginContext)).toBeUndefined()
+  })
+
+  test("server ignores input that is not a V1 plugin input", async () => {
+    expect(await plugin.server({} as never, undefined)).toEqual({})
+    expect(await plugin.server(context() as never, undefined)).toEqual({})
   })
 })

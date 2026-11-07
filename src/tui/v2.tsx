@@ -29,11 +29,22 @@ export interface V2TuiContext {
 }
 
 /**
+ * OpenCode 1.19 also runs a V2 config-plugin loader over `tui.json` entries in
+ * some paths. Only mount the V2 TUI when the context really is the 2.x TUI API
+ * (V1 exposes `keymap.registerLayer`, not `keymap.layer`).
+ */
+function isV2TuiContext(context: unknown): context is V2TuiContext {
+  const value = context as Partial<V2TuiContext> | undefined
+  return typeof value?.keymap?.layer === "function" && typeof value?.ui?.slot === "function"
+}
+
+/**
  * OpenCode 2 TUI entry. Prefer the server plugin RPC: it works when the TUI and
  * server are separate processes or machines. Older 2.x versions without RPC
  * fall back to the shared `remote.json` file.
  */
 export function setupV2Tui(context: V2TuiContext): Promise<(() => void) | undefined> {
+  if (!isV2TuiContext(context)) return Promise.resolve(undefined)
   return setup(context)
 }
 
