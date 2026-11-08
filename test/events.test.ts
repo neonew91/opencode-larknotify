@@ -45,6 +45,26 @@ describe("normalizeEvent", () => {
     ).toEqual({ sessionID: "s1", status: { type: "retry" } })
   })
 
+  test("maps the OpenCode 2 execution lifecycle to busy/idle", () => {
+    expect(
+      normalizeEvent({ type: "session.execution.started", data: { sessionID: "s1" } })?.properties,
+    ).toEqual({ sessionID: "s1", status: { type: "busy" } })
+    for (const type of ["session.execution.succeeded", "session.execution.failed"]) {
+      expect(normalizeEvent({ type, data: { sessionID: "s1" } })?.properties).toEqual({
+        sessionID: "s1",
+        status: { type: "idle" },
+        terminal: true,
+      })
+    }
+    expect(
+      normalizeEvent({ type: "session.execution.interrupted", data: { sessionID: "s1", reason: "user" } })
+        ?.properties,
+    ).toEqual({ sessionID: "s1", status: { type: "idle" }, terminal: true })
+    expect(
+      normalizeEvent({ type: "session.execution.interrupted", data: { sessionID: "s1", reason: "shutdown" } }),
+    ).toBeUndefined()
+  })
+
   test("translates a question form into a question event", () => {
     const event = normalizeEvent({
       type: "form.created",

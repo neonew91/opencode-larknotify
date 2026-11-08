@@ -141,6 +141,102 @@ describe("notify mode", () => {
     expect(t.notifications[1]?.kind).toBe("idle")
   })
 
+  test("clears a cancelled permission when the execution terminates", async () => {
+    const t = fixture("notify")
+    const asked: OpenCodeEvent = {
+      type: "permission.asked",
+      properties: { id: "perm-cancel", sessionID: "root", permission: "bash", patterns: ["rm -rf build"] },
+    }
+
+    await t.handle(status("root", "busy"))
+    await t.handle(asked)
+    expect(t.notifications).toHaveLength(1)
+    t.advance(2_000)
+
+    // 2.x interrupts the execution without emitting permission.replied.
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
+
+    expect(t.notifications).toHaveLength(2)
+    expect(t.notifications[1]?.kind).toBe("idle")
+  })
+
+  test("drops a deferred permission cancelled by a terminal", async () => {
+    const t = fixture("notify", {}, { remote: false })
+    const asked: OpenCodeEvent = {
+      type: "permission.asked",
+      properties: { id: "perm-deferred", sessionID: "root", permission: "bash", patterns: ["git push"] },
+    }
+
+    await t.handle(status("root", "busy"))
+    await t.handle(asked)
+    expect(t.deferredCount()).toBe(1)
+
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
+    expect(t.deferredCount()).toBe(0)
+
+    t.setRemote(true)
+    expect(t.flush()).toBe(0)
+    expect(t.notifications).toEqual([])
+  })
+
+  test("keeps a child permission when only the parent terminates", async () => {
+    const t = fixture("notify")
+    await t.handle(status("root", "busy"))
+    await t.handle(status("child", "busy"))
+    await t.handle({
+      type: "permission.asked",
+      properties: { id: "perm-child", sessionID: "child", permission: "bash", patterns: ["npm test"] },
+    })
+    expect(t.notifications).toHaveLength(1)
+
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
+    expect(t.notifications).toHaveLength(1)
+
+    await t.handle({
+      type: "permission.replied",
+      properties: { sessionID: "child", requestID: "perm-child", reply: "once" },
+    })
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
+    expect(t.notifications).toHaveLength(2)
+    expect(t.notifications[1]?.kind).toBe("idle")
+  })
+
+  test("clears a child permission when the child execution terminates", async () => {
+    const t = fixture("notify")
+    await t.handle(status("root", "busy"))
+    await t.handle(status("child", "busy"))
+    await t.handle({
+      type: "permission.asked",
+      properties: { id: "perm-child-cancel", sessionID: "child", permission: "bash", patterns: ["npm test"] },
+    })
+    expect(t.notifications).toHaveLength(1)
+
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "child", status: { type: "idle" }, terminal: true },
+    })
+    expect(t.notifications).toHaveLength(1)
+
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
+    expect(t.notifications).toHaveLength(2)
+    expect(t.notifications[1]?.kind).toBe("idle")
+  })
+
   test("notifies questions as plain text", async () => {
     const t = fixture("notify")
     await t.handle({

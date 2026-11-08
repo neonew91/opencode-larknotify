@@ -1,3 +1,4 @@
+import path from "node:path"
 import type { SessionInfo } from "../notifier.js"
 import { cancelFormHTTP, replyFormHTTP } from "../opencode/form-http.js"
 import { normalizeSessionInfo } from "../opencode/session.js"
@@ -8,7 +9,7 @@ import { createRuntime, type LogLevel, type ServerHost, type ServerRuntime } fro
 /** The subset of the OpenCode 2.x Promise plugin context this plugin uses. */
 export interface V2PluginContext {
   app?: { version?: string; channel?: string }
-  location?: { directory?: string }
+  location?: { directory?: string | undefined; workspaceID?: string | undefined }
   options?: Record<string, unknown>
   event: {
     subscribe(options?: { signal?: AbortSignal; types?: readonly string[] }): AsyncIterable<unknown>
@@ -72,6 +73,69 @@ export function createV2Host(ctx: V2PluginContext): ServerHost {
   }
 }
 
+interface LocationRef {
+  directory: string
+  workspaceID?: string | undefined
+}
+
+/**
+ * OpenCode 2 boots one plugin instance per active location (project), but the
+ * service's event stream is shared. Without this filter every open project
+ * pushes the same question/permission card to Feishu.
+ */
+export function belongsToLocation(raw: unknown, own: string | LocationRef): boolean {
+  const event = record(raw)
+  const location = record(event?.location)
+  const directory = stringField(location?.directory)
+  // Events without a location are scoped by their session, below.
+  if (!directory) return true
+  const target = typeof own === "string" ? { directory: own } : own
+  if (path.resolve(directory) !== path.resolve(target.directory)) return false
+  return stringField(location?.workspaceID) === target.workspaceID
+}
+
+/**
+ * Some 2.x lifecycle events (execution started/succeeded/...) carry no
+ * `location`; resolve their session and compare that instead.
+ */
+async function belongsToHost(
+  raw: unknown,
+  ctx: V2PluginContext,
+  host: ServerHost,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const event = record(raw)
+  const location = record(event?.location)
+  if (stringField(location?.directory)) {
+    return belongsToLocation(event, { directory: host.directory, workspaceID: ctx.location?.workspaceID })
+  }
+  const sessionID = eventSessionID(event)
+  if (!sessionID) return true
+  try {
+    const session = await host.loadSession(sessionID)
+    if (signal.aborted) return false
+    return belongsToLocation(
+      { location: { directory: session.directory, workspaceID: session.workspaceID } },
+      { directory: host.directory, workspaceID: ctx.location?.workspaceID },
+    )
+  } catch {
+    // A session that cannot be loaded cannot be handled by any instance.
+    return false
+  }
+}
+
+/** Session IDs live at `data.sessionID` or, for forms, `data.form.sessionID`. */
+function eventSessionID(event: Record<string, unknown> | undefined): string | undefined {
+  const data = record(event?.data)
+  const properties = record(event?.properties)
+  return (
+    stringField(data?.sessionID) ??
+    stringField(record(data?.form)?.sessionID) ??
+    stringField(properties?.sessionID) ??
+    stringField(record(properties?.form)?.sessionID)
+  )
+}
+
 /**
  * OpenCode 2 server plugin entry. The event stream is an async iterable; the
  * returned cleanup aborts it and drains the shared runtime. RPC registration is
@@ -114,6 +178,10 @@ async function subscribe(
   const types = [
     "session.status",
     "session.idle",
+    "session.execution.started",
+    "session.execution.succeeded",
+    "session.execution.failed",
+    "session.execution.interrupted",
     "permission.asked",
     "permission.replied",
     "form.created",
@@ -122,6 +190,8 @@ async function subscribe(
   ] as const
   try {
     for await (const event of ctx.event.subscribe({ signal: controller.signal, types })) {
+      if (!(await belongsToHost(event, ctx, host, controller.signal))) continue
+      if (controller.signal.aborted) return
       await runtime.handleEvent(event)
     }
   } catch (error) {
@@ -156,4 +226,12 @@ function log(level: LogLevel, message: string): void {
 
 function describe(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 300)
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined
 }

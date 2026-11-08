@@ -30,6 +30,22 @@ export function normalizeEvent(raw: unknown): OpenCodeEvent | undefined {
       return { type: "session.status", properties }
     case "session.idle":
       return { type: "session.status", properties: { sessionID: properties.sessionID, status: { type: "idle" } } }
+    // OpenCode 2 server plugins do not receive the TUI-derived session.idle and
+    // session.status events; the execution lifecycle is what the server emits.
+    case "session.execution.started":
+      return { type: "session.status", properties: { sessionID: properties.sessionID, status: { type: "busy" } } }
+    case "session.execution.succeeded":
+    case "session.execution.failed":
+      return {
+        type: "session.status",
+        properties: { sessionID: properties.sessionID, status: { type: "idle" }, terminal: true },
+      }
+    case "session.execution.interrupted":
+      if (properties.reason === "shutdown") return undefined
+      return {
+        type: "session.status",
+        properties: { sessionID: properties.sessionID, status: { type: "idle" }, terminal: true },
+      }
     case "permission.asked":
     case "permission.updated":
       return { type: "permission.asked", properties: normalizePermission(properties) }

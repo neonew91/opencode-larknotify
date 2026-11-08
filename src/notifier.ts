@@ -9,6 +9,8 @@ export interface SessionInfo {
   id: string
   title: string
   directory: string
+  /** OpenCode 2 workspace identity; absent for the local location. */
+  workspaceID?: string
   parentID?: string
   summary?: {
     files: number
@@ -69,6 +71,7 @@ export function createNotifier(dependencies: NotifierDependencies) {
   const behavior = dependencies.behavior
   const states = new Map<string, RootState>()
   const requestRoot = new Map<string, string>()
+  const requestSession = new Map<string, string>()
   const seenRequestIds = new Set<string>()
   // Requests asked while the remote switch was off, in arrival order.
   const deferred = new Map<string, Delivery>()
@@ -109,6 +112,10 @@ export function createNotifier(dependencies: NotifierDependencies) {
       return
     }
 
+    // A 2.x execution terminal means any still-open request of that session was
+    // cancelled with the run (an interrupted permission gets no
+    // permission.replied event).
+    if (props?.terminal === true) clearPendingForSession(sessionID)
     if (source.parentID) return
     const state = states.get(root.id)
     if (!state?.active || state.pending.size > 0) return
@@ -134,7 +141,7 @@ export function createNotifier(dependencies: NotifierDependencies) {
     remember(request.id)
 
     const { root, source } = await resolveRoot(request.sessionID)
-    trackPending(root.id, request.id)
+    trackPending(root.id, request.id, request.sessionID)
     const project = formatDirectory(root.directory, dependencies.homeDirectory)
     const childSession = source.parentID ? source.title : undefined
 
@@ -177,7 +184,7 @@ export function createNotifier(dependencies: NotifierDependencies) {
     remember(request.id)
 
     const { root, source } = await resolveRoot(request.sessionID)
-    trackPending(root.id, request.id)
+    trackPending(root.id, request.id, request.sessionID)
     const project = formatDirectory(root.directory, dependencies.homeDirectory)
     const childSession = source.parentID ? source.title : undefined
 
@@ -270,17 +277,31 @@ export function createNotifier(dependencies: NotifierDependencies) {
     return created
   }
 
-  function trackPending(rootID: string, requestID: string): void {
+  function trackPending(rootID: string, requestID: string, sessionID: string): void {
     getState(rootID).pending.add(requestID)
     requestRoot.set(requestID, rootID)
+    requestSession.set(requestID, sessionID)
   }
 
   function clearPending(requestID: string | undefined): void {
     if (!requestID) return
     const rootID = requestRoot.get(requestID)
+    requestSession.delete(requestID)
     if (!rootID) return
     states.get(rootID)?.pending.delete(requestID)
     requestRoot.delete(requestID)
+  }
+
+  /** Drop the requests of one finished session, including deferred pushes. */
+  function clearPendingForSession(sessionID: string): void {
+    for (const [requestID, owner] of requestSession) {
+      if (owner !== sessionID) continue
+      const rootID = requestRoot.get(requestID)
+      if (rootID) states.get(rootID)?.pending.delete(requestID)
+      requestRoot.delete(requestID)
+      requestSession.delete(requestID)
+      deferred.delete(requestID)
+    }
   }
 
   async function resolveRoot(sessionID: string): Promise<{ root: SessionInfo; source: SessionInfo }> {

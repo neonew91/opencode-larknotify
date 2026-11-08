@@ -12,6 +12,7 @@ export function normalizeSessionInfo(raw: unknown): SessionInfo {
 
   const location = record(session?.location)
   const directory = stringField(session?.directory) ?? stringField(location?.directory) ?? ""
+  const workspaceID = stringField(session?.workspaceID) ?? stringField(location?.workspaceID)
   const title = stringField(session?.title) ?? id
   const parentID = stringField(session?.parentID)
   const summary = normalizeSummary(session?.summary)
@@ -20,6 +21,7 @@ export function normalizeSessionInfo(raw: unknown): SessionInfo {
     id,
     title,
     directory,
+    ...(workspaceID ? { workspaceID } : {}),
     ...(parentID ? { parentID } : {}),
     ...(summary ? { summary } : {}),
   }
