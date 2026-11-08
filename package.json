@@ -1,6 +1,6 @@
 {
   "name": "opencode-larknotify",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenCode 1.19/2.x plugin: push question / permission requests to Feishu (Lark) and answer them from your phone, with a TUI remote switch.",
   "keywords": [
     "opencode",
