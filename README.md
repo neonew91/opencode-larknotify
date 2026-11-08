@@ -1,6 +1,6 @@
 # OpenCode Feishu Notifier
 
-面向 OpenCode `1.19.0` 的飞书通知与决策插件。
+面向 OpenCode `1.19.x` 与 `2.x` 的飞书通知与决策插件。同一个 npm 包会按宿主自动选择 V1 / V2 插件接口，不需要安装两个版本。
 
 - **远程开关**：在 OpenCode 里按 `ctrl+x f`（或 `/larknotify`）切换。离开电脑时打开，下面这些才会推送到飞书；坐在电脑前时关闭，飞书保持安静。界面上始终显示开关状态
 - 任务进入空闲（`busy → idle`）时推送「任务已结束」通知
@@ -34,7 +34,7 @@
 - **两套变量都配了**：interactive 生效，`WEBHOOK`、`SECRET`、`AT_USER_ID` 全部被忽略（所以 interactive 下的卡片不会 @ 人）。好处是把 `APP_ID` 注释掉就会自动降级成 notify。
 - **interactive 配一半最危险**：`APP_ID/APP_SECRET/RECEIVE_ID` 齐了但漏了 `ALLOWED_OPENID`，模式判定仍然选中 interactive（于是 `WEBHOOK` 被忽略），但 Broker 启动失败，在 `broker.log` 写 `[broker] disabled: OPENCODE_FEISHU_ALLOWED_OPENID must list at least one open_id`，结果两种模式都不工作。
 - **`WEBHOOK` 写错不一定报错**：只有在没配 interactive 时才会让插件停用；配了 interactive 时 `WEBHOOK` 再错也不影响。
-- **模式在启动时定下来**：改完环境变量要重启 OpenCode。同一台机器上环境变量不同的进程可以分别处于不同模式。
+- **模式在启动时定下来**：1.19 改完环境变量要重启 OpenCode；2.x 的 server 插件在后台 service 中运行，改完要 `opencode service restart`。同一台机器上环境变量不同的进程可以分别处于不同模式。
 - **interactive 是 notify 的超集**：任务结束通知照样发（由应用机器人发卡片）；既无候选项又不允许自定义回答的问题会自动降级为纯文本通知。不需要为了拿通知而同时配两套。
 - **远程开关对两种模式一视同仁**：见下面「远程开关」一节。
 
@@ -57,6 +57,8 @@
 
 - 飞书应用长连接是**集群模式**，一条回调只投递给一个客户端。因此必须由单一 Broker 持有连接，不能每个 OpenCode 进程各开一条。
 - Broker 由首个插件通过文件锁竞争后 `spawn` 启动（detached），其余进程直接连接；无活动连接且无待处理请求超过空闲阈值后自行退出。
+
+OpenCode 2 的 server 插件运行在后台 service 里，TUI 可能运行在另一个进程甚至另一台机器。因此 2.x 下 TUI 优先通过插件 **RPC** 读取/切换远程开关；RPC 不可用时才回退到本机 `remote.json`。Broker、协议和 `remote.json` 的位置在两代之间保持不变。
 
 ## 多会话为何不串
 
@@ -102,8 +104,12 @@ export OPENCODE_FEISHU_ALLOWED_OPENID="ou_a,ou_b"  # 允许在飞书决策的用
 | `OPENCODE_FEISHU_IDLE_SHUTDOWN_MS` | 否 | Broker 空闲自退阈值，默认 `1800000` |
 | `OPENCODE_FEISHU_DOMAIN` | 否 | 飞书域名，默认 `https://open.feishu.cn` |
 | `OPENCODE_FEISHU_BUN` | 否 | `bun` 可执行路径；默认自动探测（`PATH` / `~/.bun` 等），仅在探测不到时需要 |
+| `OPENCODE_FEISHU_SERVER_URL` | 否 | OpenCode 2 本地 API 地址；用于 form 回写兜底（自动读取 service 注册文件失败时） |
+| `OPENCODE_FEISHU_SERVER_PASSWORD` | 否 | 上项对应的 Basic Auth 密码；也可回退 `OPENCODE_PASSWORD` / `OPENCODE_SERVER_PASSWORD` |
 
 > 注意：当 `RECEIVE_ID_TYPE=open_id` 时，`RECEIVE_ID` 与 `ALLOWED_OPENID` 必须是**当前应用**视角的 `open_id`（open_id 每个应用都不同）。跨应用的 open_id 会被飞书以 `open_id cross app`（code 99992361）拒绝。用群 `chat_id` 或 `user_id` / `email` 可避开该问题。
+>
+> OpenCode 2 的 server 插件运行在后台 service 中，以上变量必须被 service 继承；修改后执行 `opencode service restart`。
 
 ### notify（自定义机器人）
 
@@ -113,7 +119,7 @@ export OPENCODE_FEISHU_ALLOWED_OPENID="ou_a,ou_b"  # 允许在飞书决策的用
 | `OPENCODE_FEISHU_SECRET` | 否 | 机器人签名校验密钥 |
 | `OPENCODE_FEISHU_AT_USER_ID` | 否 | 通知中 @ 的用户 open_id |
 
-## 插件选项（`opencode.json` 第二参数）
+## 插件选项（1.19：`opencode.json` 第二参数；2.x：`plugins[].options`）
 
 | 选项 | 类型 | 默认 | 说明 |
 |---|---|---:|---|
@@ -127,14 +133,18 @@ export OPENCODE_FEISHU_ALLOWED_OPENID="ou_a,ou_b"  # 允许在飞书决策的用
 
 ## 安装
 
-插件分为两部分，分别在两个配置文件里启用——**两个都要配**，少配 TUI 那部分就没地方打开开关：
+插件包含 server 和 TUI 两部分。OpenCode 1.19 与 2.x 的配置格式不同，下面分别说明。
+
+### OpenCode 1.19.x
+
+两个配置文件都要配：
 
 | 部分 | 作用 | 配置文件 |
 |---|---|---|
 | server 插件 | 监听事件、推送飞书 | `opencode.json` |
 | TUI 插件 | 快捷键、开关状态显示 | `tui.json` |
 
-全局配置 `~/.config/opencode/opencode.json`：
+`~/.config/opencode/opencode.json`：
 
 ```json
 {
@@ -145,7 +155,7 @@ export OPENCODE_FEISHU_ALLOWED_OPENID="ou_a,ou_b"  # 允许在飞书决策的用
 }
 ```
 
-全局 TUI 配置 `~/.config/opencode/tui.json`：
+`~/.config/opencode/tui.json`：
 
 ```json
 {
@@ -154,9 +164,49 @@ export OPENCODE_FEISHU_ALLOWED_OPENID="ou_a,ou_b"  # 允许在飞书决策的用
 }
 ```
 
-两处都写同一个包名，OpenCode 会分别解析包的 `exports["./server"]` 和 `exports["./tui"]`。npm 包由 OpenCode 自动安装到 `~/.cache/opencode/node_modules/`，不用手动 `npm install`。
+### OpenCode 2.x
 
-配置并设置环境变量后，重启 OpenCode。首次需要发送通知或发起决策时会自动拉起 Broker（`busy` 不会拉起）。
+server 配置写在 `opencode.jsonc` 的 `plugins` 里，**一个条目会同时加载 server 和 TUI 两部分**：
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "opencode-larknotify",
+      "options": {
+        "notifyOnIdle": true,
+        "notifyOnPermission": true,
+        "notifyOnQuestion": true
+      }
+    }
+  ]
+}
+```
+
+如果不需要自定义 TUI 快捷键/横幅，到这里就完成了。需要自定义时，TUI 选项要写在 `cli.json`（V2 从 server 插件列表自动加载 TUI 部分时拿不到 `plugins` 里的 options，显式条目会按 id 覆盖并带上 options）：
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": [
+    {
+      "package": "opencode-larknotify",
+      "options": { "keybind": "<leader>o", "banner": true }
+    }
+  ]
+}
+```
+
+V2 的 server 插件运行在后台 service 中，飞书环境变量必须被该 service 继承。修改环境变量后执行：
+
+```bash
+opencode service restart
+```
+
+`opencode serve`、web、桌面端不加载 TUI 插件，没有快捷键；可以直接写 `remote.json`，见下面「没有 TUI 的环境」。
+
+npm 包由 OpenCode 自动安装，不用手动 `npm install`。首次需要发送通知或发起决策时会自动拉起 Broker（`busy` 不会拉起）。
 
 > **远程开关默认是关的，不打开就不会推送任何飞书消息**。见下面「远程开关」一节。
 
@@ -167,13 +217,23 @@ bun install
 bun run build
 ```
 
-然后把两处配置换成构建产物的绝对路径：
+OpenCode 1.19 把两处配置换成构建产物：
 
 ```json
 // opencode.json
 "plugin": [["file:///path/to/op-notifier/dist/index.js", {}]]
 // tui.json
 "plugin": [["file:///path/to/op-notifier/dist/tui.js", {}]]
+```
+
+OpenCode 2.x 的本地插件路径必须是目录，直接指向仓库根目录即可（会通过 `package.json` 的 `exports` 找到 server/tui）：
+
+```jsonc
+{
+  "plugins": [
+    { "package": "/path/to/op-notifier", "options": { "notifyOnIdle": true } }
+  ]
+}
 ```
 
 改完源码重新 `bun run build` 并重启 OpenCode 即可生效（Broker 会在协议变化时自动替换，纯渲染改动需要手动结束 Broker 进程）。
@@ -210,12 +270,13 @@ bun run build
 - **两种模式都受开关控制**：notify 模式（自定义群机器人）同样是开关关闭就不发、打开后补推
 - 开关对本机所有 OpenCode 实例统一生效，任意一个 TUI 切换后，其他实例约 1 秒内同步（徽标与推送行为都会同步）
 - 状态保存在 socket 同目录的 `remote.json`（默认 `$XDG_RUNTIME_DIR/opencode-feishu/remote.json`），重启电脑后回到关闭。文件缺失、损坏、为符号链接或属于其他用户时一律视为关闭
-- TUI 插件与 server 插件必须解析到同一个 socket 目录：如果设置了 `OPENCODE_FEISHU_SOCKET`，两者都会使用它
+- OpenCode 1.19：TUI 插件与 server 插件必须解析到同一个 socket 目录（`OPENCODE_FEISHU_SOCKET`）
+- OpenCode 2.x：TUI 优先通过 server 插件 RPC 读写开关，因此 TUI 与 server 不在同一进程、甚至通过 `opencode attach` 连接远端 server 时也能切换；RPC 不可用（旧 2.x）才回退本机文件
 - 卡片默认 30 分钟过期，外出较久时可调大 `OPENCODE_FEISHU_ACTION_TTL_MS`
 
 ### 没有 TUI 的环境
 
-`opencode serve`、web、桌面端、`opencode run` 都不加载 TUI 插件，没有快捷键可按。开关状态就是一个普通文件，直接写它即可：
+`opencode serve`、web、桌面端、`opencode run` 都不加载 TUI 插件，没有快捷键可按。开关状态就是一个普通文件，直接写它即可（OpenCode 2 的 TUI RPC 不可用时也使用这个文件）：
 
 ```bash
 # 打开
@@ -228,12 +289,14 @@ echo '{"enabled": false}' > "${XDG_RUNTIME_DIR:-/tmp}/opencode-feishu/remote.jso
 
 注意 `$XDG_RUNTIME_DIR` 是 tmpfs，**重启后文件消失、开关回到关闭**。要让它长期保持打开，把上面那行写进 shell profile、systemd 单元的 `ExecStartPre`，或 CI 的某个步骤。
 
-TUI 插件选项（`tui.json` 中 `plugin` 条目的第二个元素）：
+TUI 插件选项：
 
 | 选项 | 类型 | 默认 | 说明 |
 |---|---|---:|---|
-| `keybind` | string / string[] / `false` | `"<leader>f"` | 快捷键，语法同 `tui.json` 的 `keybinds`；`false` 或 `"none"` 关闭快捷键（仍可用 `/larknotify`） |
+| `keybind` | string / string[] / `false` | `"<leader>f"` | 快捷键；`false` 或 `"none"` 关闭快捷键（仍可用 `/larknotify`） |
 | `banner` | boolean | `true` | 开启时是否显示底部横幅 |
+
+OpenCode 1.19（`tui.json` 的 `plugin` 第二个元素）：
 
 ```json
 {
@@ -242,11 +305,27 @@ TUI 插件选项（`tui.json` 中 `plugin` 条目的第二个元素）：
 }
 ```
 
-> 自定义快捷键必须写在插件选项里，不能写进 `tui.json` 的 `keybinds`（OpenCode 会拒绝未知的 keybind 名称）。
+OpenCode 2.x（`cli.json` 的 `plugins` 条目；server 部分仍写在 `opencode.jsonc`）：
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": [
+    {
+      "package": "opencode-larknotify",
+      "options": { "keybind": "<leader>o", "banner": true }
+    }
+  ]
+}
+```
+
+> 自定义快捷键必须写在插件选项里，不能写进全局 `keybinds`（OpenCode 会拒绝未知的 keybind 名称）。
 
 ## 决策语义
 
-- `question.asked`：
+OpenCode 2 的 question tool 已改为 form。插件会把 `metadata.kind === "question"` 的 form 字段映射回原有的 question 卡片：`string` 字段按单选题处理，`multiselect` 字段按多选题处理；提交时再转成 OpenCode 2 需要的 `{ q0: "A", q1: ["B"] }` 答案对象。其他 form（MCP elicitation、集成认证等）不接管，继续在 OpenCode 内处理。
+
+- `question.asked` / V2 question form：
   - 卡片先用一段 markdown 列出**所有候选项的完整文字**（`1. **选项名** — 说明`），再给出按钮。飞书按钮是单行的 `plain_text`，长文案会被客户端裁掉且无法换行，所以按钮只放「序号 + 选项名」并占满宽度，完整说明一律看上方列表。选项说明过长时会逐级降级（先省略说明、再省略条目）并明确提示
   - 单个单选问题：每个候选项是一个按钮，点击即提交
   - 多个问题：同一张卡片分步作答，标题显示进度（如「2/3」），答完一题自动进入下一题，可用「上一题」修改；全部答完进入「确认你的决策」汇总页，点「确认提交」后一次性回写全部答案（OpenCode 要求所有答案一起提交）
@@ -282,31 +361,42 @@ bun run build
 npm pack --dry-run
 ```
 
-单元测试覆盖配置解析、远程开关（状态文件读写、轮询、关闭时暂存与开启后补推）、通知状态机、决策路由、多问题分步作答状态机、`bun:sqlite` 状态机、卡片构建与 IPC 协议兼容，以及插件级集成测试；全部使用临时目录、内存与模拟，不触达真实飞书。
+单元测试覆盖配置解析、远程开关（状态文件读写、轮询、关闭时暂存与开启后补推）、通知状态机、决策路由、多问题分步作答状态机、`bun:sqlite` 状态机、卡片构建、IPC 协议兼容、V1/V2 事件归一化、V2 form 映射/回写、RPC 开关，以及插件级集成测试；全部使用临时目录、内存与模拟，不触达真实飞书。
 
 ## 排障
 
 ```bash
+# 1.19
 opencode --print-logs --log-level DEBUG
+# 2.x
+opencode service status
+opencode plugin list
 ```
 
 Broker 日志在 socket 同目录的 `broker.log`。收不到消息时依次检查：**远程开关是否已打开**（输入框右侧应显示 `● 飞书通知`）、环境变量是否被 OpenCode 进程继承、应用权限与 `card.action.trigger` 长连接是否开启、机器人是否在群内、`open_id` 是否在名单、手机端通知是否允许。
 
-插件启动日志会写明开关状态，如 `Plugin enabled (interactive, remote switch off)`；切换时记录 `Feishu remote switched on; pushed N waiting request(s)`。
+插件启动日志会写明开关状态，如 `Plugin enabled (interactive, remote switch off)`；切换时记录 `Feishu remote switched on; pushed N waiting request(s)`。OpenCode 2 的 server 日志在 `~/.local/share/opencode/log/opencode.log`，按 `role=server` 过滤，插件行以 `[opencode-larknotify]` 开头。
 
 常见错误：
 
-- 输入框右侧没有 `○ 飞书通知` 徽标、`ctrl+x f` 无反应：`tui.json` 未配置 `dist/tui.js`，或启动 OpenCode 的进程没有继承飞书环境变量（未配置飞书时 TUI 插件不注册任何东西）。修改 `tui.json` 后需重启 OpenCode。
-- 徽标显示已开启但仍收不到：TUI 与 server 插件解析到的 socket 目录不同（例如只给其中一方设置了 `OPENCODE_FEISHU_SOCKET`），或 `opencode.json` 未加载 server 插件。
+- 输入框右侧没有 `○ 飞书通知` 徽标、`ctrl+x f` 无反应：
+  - 1.19：`tui.json` 未配置 `dist/tui.js`，或启动 OpenCode 的进程没有继承飞书环境变量。
+  - 2.x：先看 `opencode plugin list` 是否有 `opencode.larknotify`；再看后台 service 是否继承了飞书环境变量（修改后 `opencode service restart`）。
+- 徽标显示已开启但仍收不到：
+  - 1.19：TUI 与 server 插件解析到的 socket 目录不同（例如只给其中一方设置了 `OPENCODE_FEISHU_SOCKET`），或 `opencode.json` 未加载 server 插件。
+  - 2.x：server 插件在后台 service 中，检查 service 环境与日志；TUI 通过 RPC 显示状态，RPC 不可用时会回退本机文件。
 - `broker.log` 出现 `Failed to change directory` 或找不到 `bun`：系统缺少 `bun` 或不在 `PATH`，用 `OPENCODE_FEISHU_BUN` 指定其绝对路径。
 - 发送报 `open_id cross app`（code 99992361）：`RECEIVE_ID` / `ALLOWED_OPENID` 的 open_id 不属于当前应用，改用本应用 open_id，或用群 `chat_id` / `user_id` / `email`。
 - 点按钮无反应：开发者后台未开启「长连接」订阅方式，或操作者 open_id 不在 `ALLOWED_OPENID` 名单。
+- 2.x question 卡片能收到但回写失败：V2 server 插件上下文没有公开 form API，插件会使用本机 service 注册文件回写。若运行在 `opencode --standalone` 或未注册 service，设置 `OPENCODE_FEISHU_SERVER_URL` 与 `OPENCODE_FEISHU_SERVER_PASSWORD`，否则该 question 只能回 OpenCode 处理；permission 不受影响。
 
 ## 限制
 
-- 仅支持 OpenCode `1.19.0`，使用 v1 插件接口，不含 v2 适配
+- 支持 OpenCode `1.19.x` 与 `2.x`；1.19 使用 V1 插件接口，2.x 使用 V2 插件接口
+- OpenCode 2 的 question 已改为 form。插件只接管 `metadata.kind === "question"` 的 form；MCP elicitation、集成认证等通用 form 不接管
+- OpenCode 2 的 server 插件上下文没有公开 `session.form`，question 回写依赖本机 service 注册文件或显式 `OPENCODE_FEISHU_SERVER_URL`；两者都不可用时 question 降级为纯通知，permission 仍可闭环
 - 决策闭环为单机多进程设计；跨机需自建中心路由
-- 远程开关依赖本机文件共享状态：`opencode attach` 连接远程服务器时 TUI 与服务端不在同一台机器，客户端的快捷键切换不到服务端的开关（需要在服务端那侧写 `remote.json`）
+- 1.19 的远程开关依赖本机文件共享状态；2.x 通过 RPC 支持远程 TUI，RPC 不可用的旧 2.x 仍回退本机文件
 - 自定义群机器人无法接收回调，决策闭环必须使用企业自建应用
 - interactive 模式的 Broker 需要系统可执行的 `bun`（用到 `bun:sqlite` 与 `Bun.listen`）；OpenCode 自带的二进制无法用于启动 Broker，找不到 `bun` 时用 `OPENCODE_FEISHU_BUN` 指定其绝对路径
 

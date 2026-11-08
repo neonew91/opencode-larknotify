@@ -20,7 +20,7 @@ const result = await Bun.build({
   format: "esm",
   naming: "[name].js",
   sourcemap: "linked",
-  external: ["@opentui/*", "solid-js", "solid-js/*", "@opencode-ai/*"],
+  external: ["@opentui/*", "solid-js", "solid-js/*", "@opencode-ai/*", "@opencode/*"],
   plugins: [createSolidTransformPlugin()],
 })
 
@@ -32,8 +32,12 @@ if (!result.success) {
 await writeFile(
   path.join(outdir, "tui.d.ts"),
   [
-    'import type { TuiPluginModule } from "@opencode-ai/plugin/tui"',
-    "declare const plugin: TuiPluginModule & { id: string }",
+    "/** OpenCode 1.x reads `tui`; OpenCode 2.x reads `setup`. */",
+    "declare const plugin: {",
+    "  id: string",
+    "  tui: (...args: any[]) => Promise<void>",
+    "  setup: (context: any) => Promise<(() => void) | undefined>",
+    "}",
     "export default plugin",
     "",
   ].join("\n"),

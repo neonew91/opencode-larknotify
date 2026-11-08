@@ -5,6 +5,9 @@ dist/
 .env.*
 !.env.example
 
+# Local OpenCode project config used to load this plugin while developing.
+.opencode/
+
 # Never commit registry credentials.
 .npmrc
 

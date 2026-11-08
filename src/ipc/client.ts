@@ -10,6 +10,7 @@ import {
 
 export interface ApplyInstruction {
   requestID: string
+  sessionID: string
   requestKind: RequestKind
   reply: Reply
 }
@@ -30,6 +31,8 @@ export interface IpcClientOptions {
   socketPath: string
   token: string
   instanceID: string
+  /** Diagnostics only; lets the broker log which plugin API started a request. */
+  host?: "v1" | "v2"
   onApply: (instruction: ApplyInstruction) => Promise<{ ok: boolean; error?: string }>
   logger?: (level: "debug" | "info" | "warn" | "error", message: string) => void
   requestTimeoutMs?: number
@@ -86,6 +89,7 @@ export class BrokerIpcClient {
       token: this.options.token,
       instanceID: this.options.instanceID,
       pid: process.pid,
+      ...(this.options.host ? { host: this.options.host } : {}),
     })
 
     const timer = setTimeout(() => this.welcome?.reject(new Error("broker handshake timed out")), this.timeout)
@@ -186,6 +190,7 @@ export class BrokerIpcClient {
       case "apply": {
         void this.handleApply(message.id, {
           requestID: message.requestID,
+          sessionID: message.sessionID,
           requestKind: message.requestKind,
           reply: message.reply,
         })

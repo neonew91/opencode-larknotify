@@ -4,7 +4,7 @@ import * as lark from "@larksuiteoapi/node-sdk"
 import type { BrokerConfig } from "../options.js"
 import type { DecisionRequest, Reply } from "../types.js"
 import { createFeishuPayload } from "../feishu.js"
-import { isAllowedOperator } from "../decision.js"
+import { buildFormAnswer, isAllowedOperator } from "../decision.js"
 import {
   PROTOCOL_VERSION,
   createNdjsonDecoder,
@@ -147,7 +147,25 @@ export function startBroker(config: BrokerConfig, token: string, dbPath: string)
 
   function resultLines(record: ActionRecord, reply: Reply): string[] {
     if (reply.kind === "permission") return [`你的选择：${reply.reply === "once" ? "允许一次" : "拒绝"}`]
-    if (reply.kind === "question-reject") return ["你的选择：已拒绝"]
+    if (reply.kind === "question-reject" || reply.kind === "form-cancel") return ["你的选择：已拒绝"]
+    if (reply.kind === "form") {
+      const questions = record.request.kind === "form" ? record.request.questions : []
+      const answerText = (question: (typeof questions)[number]) => {
+        const value = reply.answer[question.key ?? ""]
+        return Array.isArray(value) ? value.join("、") : value === undefined ? "未回答" : String(value)
+      }
+      if (questions.length <= 1) {
+        const first = questions[0]
+        return [`你的选择：${escapeMarkdown(first ? answerText(first) : "未回答", 600)}`]
+      }
+      return [
+        "你的选择：",
+        ...questions.map((question, index) => {
+          const title = question.header || question.question || `问题 ${index + 1}`
+          return `${index + 1}. **${escapeMarkdown(title, 60)}**：${escapeMarkdown(answerText(question), 600)}`
+        }),
+      ]
+    }
     const questions = record.request.kind === "question" ? record.request.questions : []
     if (questions.length <= 1) return [`你的选择：${escapeMarkdown((reply.answers[0] ?? []).join("、"), 600)}`]
     return [
@@ -168,7 +186,14 @@ export function startBroker(config: BrokerConfig, token: string, dbPath: string)
         resolve({ ok: false, error: "apply timed out" })
       }, 15_000)
       conn.applyWaiters.set(id, { resolve, timer })
-      sendTo(conn, { type: "apply", id, requestID: record.requestID, requestKind: record.requestKind, reply })
+      sendTo(conn, {
+        type: "apply",
+        id,
+        requestID: record.requestID,
+        sessionID: record.sessionID,
+        requestKind: record.requestKind,
+        reply,
+      })
     })
   }
 
@@ -245,9 +270,22 @@ export function startBroker(config: BrokerConfig, token: string, dbPath: string)
       )
     }
 
+    if (outcome.type === "reject") {
+      progress.delete(action.t)
+      return finalize(record, operatorID, record.request.kind === "form" ? { kind: "form-cancel" } : { kind: "question-reject" })
+    }
+
+    if (record.request.kind === "form") {
+      const built = buildFormAnswer(questions, outcome.answers)
+      if (!built.ok) {
+        return respond(buildDecisionCard(record.request, action.t, current), { type: "warning", content: built.notice })
+      }
+      progress.delete(action.t)
+      return finalize(record, operatorID, { kind: "form", answer: built.answer })
+    }
+
     progress.delete(action.t)
-    const reply: Reply = outcome.type === "reject" ? { kind: "question-reject" } : { kind: "question", answers: outcome.answers }
-    return finalize(record, operatorID, reply)
+    return finalize(record, operatorID, { kind: "question", answers: outcome.answers })
   }
 
   function finalize(record: ActionRecord, operatorID: string, reply: Reply): Record<string, unknown> {
@@ -295,7 +333,10 @@ export function startBroker(config: BrokerConfig, token: string, dbPath: string)
         const ok = protocolOk && tokenOk
         conn.helloDone = ok
         conn.instanceID = message.instanceID
-        log("info", `hello conn=${conn.id} instance=${message.instanceID} protocol=${message.protocol} ok=${ok}`)
+        log(
+          "info",
+          `hello conn=${conn.id} instance=${message.instanceID} host=${message.host ?? "v1"} protocol=${message.protocol} ok=${ok}`,
+        )
         const error = !protocolOk ? `unsupported protocol ${message.protocol}` : !tokenOk ? "token mismatch" : undefined
         sendTo(conn, {
           type: "welcome",

@@ -4,12 +4,13 @@ import type { DecisionRequest, Notification, Reply, RequestKind } from "../types
  * Protocol history:
  * 1  single-question decisions
  * 2  multi-question wizard; question notifications carry `questions[]`
+ * 3  OpenCode 2 forms; `apply` carries `sessionID`
  *
  * The broker accepts every version from MIN_COMPATIBLE_PROTOCOL so plugins that
  * were loaded before an upgrade keep working. A plugin always sends its own
  * version, which lets an outdated broker reject it and be replaced.
  */
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 export const MIN_COMPATIBLE_PROTOCOL = 1
 
 export function isCompatibleProtocol(version: unknown): boolean {
@@ -22,6 +23,8 @@ export interface PluginHello {
   token: string
   instanceID: string
   pid: number
+  /** Diagnostics only; absent on plugins older than protocol 3. */
+  host?: "v1" | "v2"
 }
 
 export interface PluginNotify {
@@ -81,6 +84,8 @@ export interface BrokerApply {
   type: "apply"
   id: string
   requestID: string
+  /** Needed by OpenCode 2 permission/form replies; ignored by 1.x. */
+  sessionID: string
   requestKind: RequestKind
   reply: Reply
 }

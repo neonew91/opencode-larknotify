@@ -26,7 +26,7 @@ describe("ndjson protocol", () => {
 describe("protocol compatibility", () => {
   test("accepts every supported plugin version and rejects others", async () => {
     const { PROTOCOL_VERSION, MIN_COMPATIBLE_PROTOCOL, isCompatibleProtocol } = await import("../src/ipc/protocol.js")
-    expect(PROTOCOL_VERSION).toBe(2)
+    expect(PROTOCOL_VERSION).toBe(3)
     expect(isCompatibleProtocol(MIN_COMPATIBLE_PROTOCOL)).toBe(true)
     expect(isCompatibleProtocol(PROTOCOL_VERSION)).toBe(true)
     expect(isCompatibleProtocol(PROTOCOL_VERSION + 1)).toBe(false)

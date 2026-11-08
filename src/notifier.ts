@@ -1,22 +1,22 @@
 import type { DecisionRequest, Notification, QuestionSpec } from "./types.js"
 import type { NotifierBehavior } from "./options.js"
 import { isInteractiveQuestion } from "./decision.js"
+import type { OpenCodeEvent } from "./opencode/events.js"
+
+export type { OpenCodeEvent } from "./opencode/events.js"
 
 export interface SessionInfo {
   id: string
   title: string
   directory: string
+  /** OpenCode 2 workspace identity; absent for the local location. */
+  workspaceID?: string
   parentID?: string
   summary?: {
     files: number
     additions: number
     deletions: number
   }
-}
-
-export interface OpenCodeEvent {
-  type: string
-  properties: unknown
 }
 
 export type NotifierMode = "notify" | "interactive"
@@ -62,6 +62,7 @@ interface QuestionAsked {
   id: string
   sessionID: string
   questions: QuestionSpec[]
+  form: boolean
 }
 
 export function createNotifier(dependencies: NotifierDependencies) {
@@ -70,6 +71,7 @@ export function createNotifier(dependencies: NotifierDependencies) {
   const behavior = dependencies.behavior
   const states = new Map<string, RootState>()
   const requestRoot = new Map<string, string>()
+  const requestSession = new Map<string, string>()
   const seenRequestIds = new Set<string>()
   // Requests asked while the remote switch was off, in arrival order.
   const deferred = new Map<string, Delivery>()
@@ -98,10 +100,10 @@ export function createNotifier(dependencies: NotifierDependencies) {
     const sessionID = stringField(props?.sessionID)
     const status = record(props?.status)
     const statusType = stringField(status?.type)
-    if (!sessionID || (statusType !== "busy" && statusType !== "idle")) return
+    if (!sessionID || (statusType !== "busy" && statusType !== "idle" && statusType !== "retry")) return
 
     const { root, source } = await resolveRoot(sessionID)
-    if (statusType === "busy") {
+    if (statusType === "busy" || statusType === "retry") {
       const state = getState(root.id)
       if (!state.active) {
         state.active = true
@@ -110,6 +112,10 @@ export function createNotifier(dependencies: NotifierDependencies) {
       return
     }
 
+    // A 2.x execution terminal means any still-open request of that session was
+    // cancelled with the run (an interrupted permission gets no
+    // permission.replied event).
+    if (props?.terminal === true) clearPendingForSession(sessionID)
     if (source.parentID) return
     const state = states.get(root.id)
     if (!state?.active || state.pending.size > 0) return
@@ -135,7 +141,7 @@ export function createNotifier(dependencies: NotifierDependencies) {
     remember(request.id)
 
     const { root, source } = await resolveRoot(request.sessionID)
-    trackPending(root.id, request.id)
+    trackPending(root.id, request.id, request.sessionID)
     const project = formatDirectory(root.directory, dependencies.homeDirectory)
     const childSession = source.parentID ? source.title : undefined
 
@@ -178,7 +184,7 @@ export function createNotifier(dependencies: NotifierDependencies) {
     remember(request.id)
 
     const { root, source } = await resolveRoot(request.sessionID)
-    trackPending(root.id, request.id)
+    trackPending(root.id, request.id, request.sessionID)
     const project = formatDirectory(root.directory, dependencies.homeDirectory)
     const childSession = source.parentID ? source.title : undefined
 
@@ -186,7 +192,7 @@ export function createNotifier(dependencies: NotifierDependencies) {
       deliver(request.id, {
         type: "decide",
         request: {
-          kind: "question",
+          kind: request.form ? "form" : "question",
           requestID: request.id,
           instanceID: dependencies.instanceID,
           sessionID: request.sessionID,
@@ -271,17 +277,31 @@ export function createNotifier(dependencies: NotifierDependencies) {
     return created
   }
 
-  function trackPending(rootID: string, requestID: string): void {
+  function trackPending(rootID: string, requestID: string, sessionID: string): void {
     getState(rootID).pending.add(requestID)
     requestRoot.set(requestID, rootID)
+    requestSession.set(requestID, sessionID)
   }
 
   function clearPending(requestID: string | undefined): void {
     if (!requestID) return
     const rootID = requestRoot.get(requestID)
+    requestSession.delete(requestID)
     if (!rootID) return
     states.get(rootID)?.pending.delete(requestID)
     requestRoot.delete(requestID)
+  }
+
+  /** Drop the requests of one finished session, including deferred pushes. */
+  function clearPendingForSession(sessionID: string): void {
+    for (const [requestID, owner] of requestSession) {
+      if (owner !== sessionID) continue
+      const rootID = requestRoot.get(requestID)
+      if (rootID) states.get(rootID)?.pending.delete(requestID)
+      requestRoot.delete(requestID)
+      requestSession.delete(requestID)
+      deferred.delete(requestID)
+    }
   }
 
   async function resolveRoot(sessionID: string): Promise<{ root: SessionInfo; source: SessionInfo }> {
@@ -333,7 +353,7 @@ function parseQuestionAsked(value: unknown): QuestionAsked | undefined {
   if (!id || !sessionID || !Array.isArray(rawQuestions)) return undefined
   const questions = rawQuestions.map(parseQuestionSpec).filter((item): item is QuestionSpec => item !== undefined)
   if (questions.length === 0) return undefined
-  return { id, sessionID, questions }
+  return { id, sessionID, questions, form: props?.form === true }
 }
 
 function parseQuestionSpec(value: unknown): QuestionSpec | undefined {
@@ -350,7 +370,18 @@ function parseQuestionSpec(value: unknown): QuestionSpec | undefined {
       return { label, description: stringField(optionRecord?.description) ?? "" }
     })
     .filter((option): option is { label: string; description: string } => option !== undefined)
-  return { header: header ?? "", question, options, multiple: props?.multiple === true, custom: props?.custom !== false }
+  const key = stringField(props?.key)
+  const answerType =
+    props?.answerType === "multiselect" ? "multiselect" : props?.answerType === "string" ? "string" : undefined
+  return {
+    header: header ?? "",
+    question,
+    options,
+    multiple: props?.multiple === true,
+    custom: props?.custom !== false,
+    ...(key ? { key } : {}),
+    ...(answerType ? { answerType } : {}),
+  }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

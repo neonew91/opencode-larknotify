@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createNotifier, formatDirectory, type NotifierMode, type OpenCodeEvent, type SessionInfo } from "../src/notifier.js"
+import { normalizeEvent } from "../src/opencode/events.js"
 import type { DecisionRequest, Notification } from "../src/types.js"
 import type { NotifierBehavior } from "../src/options.js"
 
@@ -136,6 +137,102 @@ describe("notify mode", () => {
       properties: { sessionID: "child", requestID: "perm-1", reply: "once" },
     })
     await t.handle(status("root", "idle"))
+    expect(t.notifications).toHaveLength(2)
+    expect(t.notifications[1]?.kind).toBe("idle")
+  })
+
+  test("clears a cancelled permission when the execution terminates", async () => {
+    const t = fixture("notify")
+    const asked: OpenCodeEvent = {
+      type: "permission.asked",
+      properties: { id: "perm-cancel", sessionID: "root", permission: "bash", patterns: ["rm -rf build"] },
+    }
+
+    await t.handle(status("root", "busy"))
+    await t.handle(asked)
+    expect(t.notifications).toHaveLength(1)
+    t.advance(2_000)
+
+    // 2.x interrupts the execution without emitting permission.replied.
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
+
+    expect(t.notifications).toHaveLength(2)
+    expect(t.notifications[1]?.kind).toBe("idle")
+  })
+
+  test("drops a deferred permission cancelled by a terminal", async () => {
+    const t = fixture("notify", {}, { remote: false })
+    const asked: OpenCodeEvent = {
+      type: "permission.asked",
+      properties: { id: "perm-deferred", sessionID: "root", permission: "bash", patterns: ["git push"] },
+    }
+
+    await t.handle(status("root", "busy"))
+    await t.handle(asked)
+    expect(t.deferredCount()).toBe(1)
+
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
+    expect(t.deferredCount()).toBe(0)
+
+    t.setRemote(true)
+    expect(t.flush()).toBe(0)
+    expect(t.notifications).toEqual([])
+  })
+
+  test("keeps a child permission when only the parent terminates", async () => {
+    const t = fixture("notify")
+    await t.handle(status("root", "busy"))
+    await t.handle(status("child", "busy"))
+    await t.handle({
+      type: "permission.asked",
+      properties: { id: "perm-child", sessionID: "child", permission: "bash", patterns: ["npm test"] },
+    })
+    expect(t.notifications).toHaveLength(1)
+
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
+    expect(t.notifications).toHaveLength(1)
+
+    await t.handle({
+      type: "permission.replied",
+      properties: { sessionID: "child", requestID: "perm-child", reply: "once" },
+    })
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
+    expect(t.notifications).toHaveLength(2)
+    expect(t.notifications[1]?.kind).toBe("idle")
+  })
+
+  test("clears a child permission when the child execution terminates", async () => {
+    const t = fixture("notify")
+    await t.handle(status("root", "busy"))
+    await t.handle(status("child", "busy"))
+    await t.handle({
+      type: "permission.asked",
+      properties: { id: "perm-child-cancel", sessionID: "child", permission: "bash", patterns: ["npm test"] },
+    })
+    expect(t.notifications).toHaveLength(1)
+
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "child", status: { type: "idle" }, terminal: true },
+    })
+    expect(t.notifications).toHaveLength(1)
+
+    await t.handle({
+      type: "session.status",
+      properties: { sessionID: "root", status: { type: "idle" }, terminal: true },
+    })
     expect(t.notifications).toHaveLength(2)
     expect(t.notifications[1]?.kind).toBe("idle")
   })
@@ -416,5 +513,37 @@ describe("remote switch", () => {
     const t = fixture("notify", { notifyOnPermission: false }, { remote: false })
     await t.handle(permissionAsked("p-1"))
     expect(t.deferredCount()).toBe(0)
+  })
+})
+
+describe("OpenCode 2 event normalization", () => {
+  test("routes a question form as a keyed form decision", async () => {
+    const t = fixture("interactive")
+    const event = normalizeEvent({
+      type: "form.created",
+      data: {
+        form: {
+          id: "form-1",
+          sessionID: "root",
+          metadata: { kind: "question" },
+          fields: [
+            {
+              key: "q0",
+              title: "方案",
+              description: "选哪个",
+              type: "string",
+              custom: true,
+              options: [{ value: "A", label: "A", description: "" }],
+            },
+          ],
+        },
+      },
+    })
+    await t.handle(event as OpenCodeEvent)
+
+    const decision = t.decisions[0]
+    expect(decision).toMatchObject({ kind: "form", requestID: "form-1" })
+    if (decision?.kind !== "form") throw new Error("expected a form decision")
+    expect(decision.questions[0]).toMatchObject({ key: "q0", answerType: "string", custom: true })
   })
 })
